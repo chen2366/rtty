@@ -4,8 +4,12 @@ import (
     "flag"
     "log"
     "fmt"
+    "time"
     "strconv"
+    "math/rand"
     "net/http"
+    "crypto/md5"
+    "encoding/hex"
     "encoding/json"
     "github.com/gorilla/websocket"
 )
@@ -23,9 +27,18 @@ type Device struct {
     sid map[string]*websocket.Conn
 }
 
-var devices = make(map[string]Device)
+var devices = make(map[string]*Device)
 
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{}
+
+func generateSID(did string) string {
+    md5Ctx := md5.New()
+    md5Ctx.Write([]byte(did + strconv.FormatFloat(rand.Float64(), 'e', 6, 32)))
+    cipherStr := md5Ctx.Sum(nil)
+    fmt.Print(cipherStr)
+    fmt.Print("\n")
+    return hex.EncodeToString(cipherStr)
+}
 
 func aliveDevice(did string) {
     dev := devices[did]
@@ -38,14 +51,42 @@ func parseFrame(msg []byte) *Frame {
     return &f
 }
 
-func login(did string) string{
-    sid := "1231232"
-    dev := devices[did]
+func flushDevice() {
+    for {
+        time.Sleep(time.Second * 5)
 
-    f := Frame{Type: "login", SID: sid}
+        for did, dev := range devices {
+            dev.active--
+            fmt.Println(did, dev.active)
+        }
+    }
+}
+
+func login(did string, ws *websocket.Conn) (string, bool) {
+    f := Frame{Type: "login"}
+
+    dev, ok := devices[did]
+    if !ok {
+        f.Err = "Device off-line"
+        js, _ := json.Marshal(f)
+        ws.WriteMessage(websocket.TextMessage, js)
+        return "", false
+    }
+
+    sid := generateSID(did)
+    dev.sid[sid] = ws
+
+    f.SID = sid
     js, _ := json.Marshal(f)
+    ws.WriteMessage(websocket.TextMessage, js)
     dev.ws.WriteMessage(websocket.TextMessage, js)
-    return sid
+    return sid, true
+}
+
+func logout(did string, sid string) {
+    f := Frame{Type: "logout", SID: sid}
+    js, _ := json.Marshal(f)
+    devices[did].ws.WriteMessage(websocket.TextMessage, js)
 }
 
 func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
@@ -57,10 +98,8 @@ func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
         return
     }
     defer c.Close()
-    
-    devices[did] = Device{3, c, make(map[string]*websocket.Conn)}
-
-    fmt.Println("new device:", did)
+    dev := Device{3, c, make(map[string]*websocket.Conn)}
+    devices[did] = &dev
 
     for {
         mt, message, err := c.ReadMessage()
@@ -75,26 +114,27 @@ func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
             if f.Type == "ping" {
                 aliveDevice(did)
             } else if (f.Type == "data" || f.Type == "logout") {
-
+                devices[did].sid[f.SID].WriteMessage(websocket.TextMessage, message)
             }
-            fmt.Println("frame type:", f.Type)
         }
     }
 }
 
 func wsHandlerBrowser(w http.ResponseWriter, r *http.Request) {
     did := r.URL.Query().Get("did")
-
     c, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
         log.Print("upgrade:", err)
         return
     }
     defer c.Close()
+    
+    sid, ok := login(did, c)
+    if !ok {
+        return
+    }
 
-    sid := login(did)
-
-    fmt.Println("new login:", sid)
+    defer logout(did, sid)
 
     for {
         mt, message, err := c.ReadMessage()
@@ -105,13 +145,9 @@ func wsHandlerBrowser(w http.ResponseWriter, r *http.Request) {
 
         if mt == websocket.TextMessage {
             f := parseFrame(message)
-            
-            if f.Type == "ping" {
-                aliveDevice(did)
-            } else if (f.Type == "data" || f.Type == "logout") {
-
+            if f.Type == "data" {
+                devices[did].ws.WriteMessage(websocket.TextMessage, message)
             }
-            fmt.Println("frame type:", f.Type)
         }
     }
 }
@@ -131,9 +167,12 @@ func HandlerList(w http.ResponseWriter, r *http.Request) {
 
 func main() {
     port := flag.Int("port", 5912, "http service port")
-    document := flag.String("document", ".", "http service document dir")
+    document := flag.String("document", "./www", "http service document dir")
     log.SetFlags(0)
     flag.Parse()
+
+    go flushDevice()
+
     http.HandleFunc("/ws/device", wsHandlerDevice)
     http.HandleFunc("/ws/browser", wsHandlerBrowser)
     http.HandleFunc("/list", HandlerList)
