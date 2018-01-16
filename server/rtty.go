@@ -5,6 +5,7 @@ import (
     "log"
     "fmt"
     "time"
+    "sync"
     "strconv"
     "math/rand"
     "net/http"
@@ -27,6 +28,7 @@ type Device struct {
     sid map[string]*websocket.Conn
 }
 
+var mu sync.Mutex
 var devices = make(map[string]*Device)
 
 var upgrader = websocket.Upgrader{}
@@ -41,8 +43,10 @@ func generateSID(did string) string {
 }
 
 func aliveDevice(did string) {
+    mu.Lock()
     dev := devices[did]
     dev.active = 3
+    mu.Unlock()
 }
 
 func parseFrame(msg []byte) *Frame {
@@ -55,20 +59,24 @@ func flushDevice() {
     for {
         time.Sleep(time.Second * 5)
 
+        mu.Lock()
         for did, dev := range devices {
             dev.active--
             if dev.active == 0 {
                 delete(devices, did)
             }
         }
+        mu.Unlock()
     }
 }
 
 func login(did string, ws *websocket.Conn) (string, bool) {
     f := Frame{Type: "login"}
 
+    mu.Lock()
     dev, ok := devices[did]
     if !ok {
+        mu.Unlock()
         f.Err = "Device off-line"
         js, _ := json.Marshal(f)
         ws.WriteMessage(websocket.TextMessage, js)
@@ -82,13 +90,16 @@ func login(did string, ws *websocket.Conn) (string, bool) {
     js, _ := json.Marshal(f)
     ws.WriteMessage(websocket.TextMessage, js)
     dev.ws.WriteMessage(websocket.TextMessage, js)
+    mu.Unlock()
     return sid, true
 }
 
 func logout(did string, sid string) {
     f := Frame{Type: "logout", SID: sid}
     js, _ := json.Marshal(f)
+    mu.Lock()
     devices[did].ws.WriteMessage(websocket.TextMessage, js)
+    mu.Unlock()
 }
 
 func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +113,9 @@ func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
     defer c.Close()
 
     dev := Device{3, c, make(map[string]*websocket.Conn)}
+    mu.Lock()
     devices[did] = &dev
+    mu.Unlock()
 
     for {
         mt, message, err := c.ReadMessage()
@@ -117,7 +130,9 @@ func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
             if f.Type == "ping" {
                 aliveDevice(did)
             } else if (f.Type == "data" || f.Type == "logout") {
+                mu.Lock()
                 devices[did].sid[f.SID].WriteMessage(websocket.TextMessage, message)
+                mu.Unlock()
             }
         }
     }
@@ -149,7 +164,9 @@ func wsHandlerBrowser(w http.ResponseWriter, r *http.Request) {
         if mt == websocket.TextMessage {
             f := parseFrame(message)
             if f.Type == "data" {
+                mu.Lock()
                 devices[did].ws.WriteMessage(websocket.TextMessage, message)
+                mu.Unlock()
             }
         }
     }
@@ -157,9 +174,11 @@ func wsHandlerBrowser(w http.ResponseWriter, r *http.Request) {
 
 func HandlerList(w http.ResponseWriter, r *http.Request) {
     var s []string
+    mu.Lock()
     for k, _ := range devices {
         s = append(s, k)
     }
+    mu.Unlock()
     js, err := json.Marshal(s)
     if err != nil {
         fmt.Println("error:", err)
