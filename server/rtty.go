@@ -57,7 +57,9 @@ func flushDevice() {
 
         for did, dev := range devices {
             dev.active--
-            fmt.Println(did, dev.active)
+            if dev.active == 0 {
+                delete(devices, did)
+            }
         }
     }
 }
@@ -98,13 +100,14 @@ func wsHandlerDevice(w http.ResponseWriter, r *http.Request) {
         return
     }
     defer c.Close()
+
     dev := Device{3, c, make(map[string]*websocket.Conn)}
     devices[did] = &dev
 
     for {
         mt, message, err := c.ReadMessage()
         if err != nil {
-            log.Println("read:", err)
+            log.Println("read", err)
             break
         }
 
