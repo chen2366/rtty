@@ -90,11 +90,11 @@ static void keepalive(struct uloop_timeout *utm)
     free(str);
 
     if (!active--) {
-        gcl->free(gcl);
-        gcl = NULL;
-
+        ULOG_ERR("keepalive timeout\n");
         if (auto_reconnect)
             do_connect();
+        else
+            uloop_end();
         return;
     }
 
@@ -183,7 +183,7 @@ static void uwsc_onopen(struct uwsc_client *cl)
     active = 3;
     keepalive_timer.cb = keepalive;
     uloop_timeout_set(&keepalive_timer, KEEPALIVE_INTERVAL * 1000);
-    ULOG_INFO("onopen");
+    ULOG_INFO("onopen\n");
 }
 
 static void uwsc_onmessage(struct uwsc_client *cl, char *msg, uint64_t len, enum websocket_op op)
@@ -196,7 +196,7 @@ static void uwsc_onmessage(struct uwsc_client *cl, char *msg, uint64_t len, enum
     blobmsg_add_json_from_string(&b, msg);
 
     if (blobmsg_parse(pol, ARRAY_SIZE(pol), tb, blob_data(b.head), blob_len(b.head)) != 0) {
-        ULOG_ERR("Parse failed");
+        ULOG_ERR("Parse failed\n");
         return;
     }
 
@@ -243,7 +243,7 @@ static void uwsc_onmessage(struct uwsc_client *cl, char *msg, uint64_t len, enum
         active = 3;
     } else if (!strcmp(type, "add")) {
         if (tb[RTTYD_ERR]) {
-            ULOG_ERR("add failed: %s", blobmsg_get_string(tb[RTTYD_ERR]));
+            ULOG_ERR("add failed: %s\n", blobmsg_get_string(tb[RTTYD_ERR]));
             uloop_end();
         }
     }
@@ -251,13 +251,13 @@ static void uwsc_onmessage(struct uwsc_client *cl, char *msg, uint64_t len, enum
 
 static void uwsc_onerror(struct uwsc_client *cl)
 {
-    ULOG_ERR("onerror:%d", cl->error);
+    ULOG_ERR("onerror:%d\n", cl->error);
 }
 
 static void uwsc_onclose(struct uwsc_client *cl)
 {
     active = 0;
-    ULOG_ERR("onclose");
+    ULOG_ERR("onclose\n");
 
     if (auto_reconnect) {
         cl->free(cl);
