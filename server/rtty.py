@@ -110,7 +110,7 @@ async def handle_list(request):
     return web.json_response(list(devices.devs.keys()))
 
 async def handle_root(request):
-    return web.Response(status = 302, headers = {'location': '/rtty.html'})
+    return web.Response(status = 302, headers = {'location': '/index.html'})
 
 port = 5912
 document = './www'
